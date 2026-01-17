@@ -3,6 +3,17 @@ import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { generateCalendarForRange } from './utils';
 import { DailyWorkout, WeekType, CardioMode, WorkoutBlock, Exercise } from './types';
 
+// Extended type for internal tracking to maintain identity through edits
+interface ExtendedExercise extends Exercise {
+  originalName: string;
+}
+
+// Local helper type for blocks with extended exercises
+interface ExtendedWorkoutBlock {
+  title: string;
+  exercises: ExtendedExercise[];
+}
+
 const MUSCLE_COLORS: Record<string, string> = {
   'CAS': 'bg-[#e29578]',      // Peach
   'Back': 'bg-[#457b9d]',     // Steel Blue
@@ -25,13 +36,13 @@ const Diamond: React.FC<{ className?: string, colorClass: string }> = ({ classNa
 );
 
 interface ScheduleHistoryItem {
-  targetBlocks: WorkoutBlock[];
-  sourceBlocks: WorkoutBlock[];
+  targetBlocks: ExtendedWorkoutBlock[];
+  sourceBlocks: ExtendedWorkoutBlock[];
   sourceKey: string;
 }
 
 interface DeletedExercise {
-  ex: Exercise;
+  ex: ExtendedExercise;
   originalIndex: number;
 }
 
@@ -49,7 +60,7 @@ const App: React.FC = () => {
   const [scheduleHistory, setScheduleHistory] = useState<Record<string, ScheduleHistoryItem>>({});
   
   // Track "Soft Deleted" items locally for immediate restoration UI
-  const [deletedItemsThisSession, setDeletedItemsThisSession] = useState<Record<string, { blocks: WorkoutBlock[], exercises: Record<number, DeletedExercise[]> }>>({});
+  const [deletedItemsThisSession, setDeletedItemsThisSession] = useState<Record<string, { blocks: ExtendedWorkoutBlock[], exercises: Record<number, DeletedExercise[]> }>>({});
 
   // Move / Combine State
   const [moveSourceId, setMoveSourceId] = useState<string | null>(null);
@@ -68,7 +79,7 @@ const App: React.FC = () => {
 
   // Editing State
   const [editingExKey, setEditingExKey] = useState<string | null>(null);
-  const [editBuffer, setEditBuffer] = useState<Partial<Exercise>>({});
+  const [editBuffer, setEditBuffer] = useState<Partial<ExtendedExercise>>({});
 
   const [todayMidnight, setTodayMidnight] = useState(() => {
     const d = new Date();
@@ -79,7 +90,8 @@ const App: React.FC = () => {
   const [completedDays, setCompletedDays] = useState<Record<string, boolean>>({});
   const [skippedDays, setSkippedDays] = useState<Record<string, boolean>>({});
   const [dayNotes, setDayNotes] = useState<Record<string, string>>({});
-  const [workoutOverrides, setWorkoutOverrides] = useState<Record<string, WorkoutBlock[]>>({});
+  // Update workoutOverrides state to use the extended block type
+  const [workoutOverrides, setWorkoutOverrides] = useState<Record<string, ExtendedWorkoutBlock[]>>({});
   const [cardioOverrides, setCardioOverrides] = useState<Record<string, CardioMode | null>>({});
 
   useEffect(() => {
@@ -116,16 +128,21 @@ const App: React.FC = () => {
     return baseSchedule.map(day => {
       const dateKey = day.date.toISOString().split('T')[0];
       
-      let blocks = day.blocks.map(block => ({
+      // Compute "Global Routine" for this day before checking overrides
+      // Explicitly type blocks to ensure compatibility with ExtendedWorkoutBlock[]
+      let blocks: ExtendedWorkoutBlock[] = day.blocks.map(block => ({
         ...block,
         exercises: block.exercises
           .filter(ex => !globalDeletions.includes(ex.name))
           .map(ex => {
             const mod = globalModifications[ex.name];
-            return mod ? { ...ex, ...mod } : ex;
+            // Ensure originalName is always attached for identity tracking
+            return { ...ex, ...mod, originalName: ex.name } as ExtendedExercise;
           })
       })).filter(block => block.exercises.length > 0);
 
+      // Local overrides take priority over global modifications for a specific day
+      // workoutOverrides now uses ExtendedWorkoutBlock[] which matches the inferred type of blocks
       if (workoutOverrides[dateKey] !== undefined) {
         blocks = workoutOverrides[dateKey];
       }
@@ -162,7 +179,7 @@ const App: React.FC = () => {
         .filter(ex => !globalDeletions.includes(ex.name))
         .map(ex => {
           const mod = globalModifications[ex.name];
-          return mod ? { ...ex, ...mod } : ex;
+          return { ...ex, ...mod, originalName: ex.name } as ExtendedExercise;
         })
     })).filter(block => block.exercises.length > 0);
   }, [selectedDayId, baseSchedule, globalModifications, globalDeletions]);
@@ -303,19 +320,26 @@ const App: React.FC = () => {
     }
   };
 
-  const undoExerciseChangeForName = (dateKey: string, exName: string) => {
-    const baseEx = baseDayBlocks.flatMap(b => b.exercises).find(e => e.name === exName);
-    if (!baseEx) return;
+  const undoExerciseChangeForName = (dateKey: string, originalName: string) => {
+    if (!selectedDay) return;
 
     setWorkoutOverrides(prev => {
       const next = { ...prev };
-      const currentBlocks = JSON.parse(JSON.stringify(next[dateKey] || selectedDay?.blocks || []));
+      // Explicitly type currentBlocks as ExtendedWorkoutBlock[]
+      const currentBlocks: ExtendedWorkoutBlock[] = JSON.parse(JSON.stringify(next[dateKey] || selectedDay.blocks));
       
-      const newBlocks = currentBlocks.map((b: WorkoutBlock) => ({
+      // Find the base version of the exercise from the core routine logic
+      const baseDay = baseSchedule.find(d => d.date.toISOString().split('T')[0] === dateKey);
+      if (!baseDay) return prev;
+      const baseEx = baseDay.blocks.flatMap(b => b.exercises).find(e => e.name === originalName);
+      if (!baseEx) return prev;
+
+      const newBlocks = currentBlocks.map(b => ({
         ...b,
-        exercises: b.exercises.map((e: Exercise) => 
-          e.name === exName ? { ...e, ...baseEx } : e
-        )
+        exercises: b.exercises.map(e => {
+           // Restore if current name OR originalName matches (handles name changes)
+           return (e.originalName === originalName || e.name === originalName) ? { ...baseEx, originalName } as ExtendedExercise : e;
+        })
       }));
       
       next[dateKey] = newBlocks;
@@ -326,7 +350,7 @@ const App: React.FC = () => {
   const deleteExercise = (dateKey: string, blockIdx: number, exIdx: number, global: boolean = false) => {
     if (!selectedDay) return;
     const currentBlocks = JSON.parse(JSON.stringify(selectedDay.blocks));
-    const exercise = currentBlocks[blockIdx].exercises[exIdx];
+    const exercise = currentBlocks[blockIdx].exercises[exIdx] as ExtendedExercise;
 
     if (global) {
       if (window.confirm(`Remove "${exercise.name}" from all days?`)) {
@@ -342,10 +366,10 @@ const App: React.FC = () => {
         };
       });
 
-      const newBlocks = currentBlocks.map((b: WorkoutBlock, bIdx: number) => {
+      const newBlocks = currentBlocks.map((b: ExtendedWorkoutBlock, bIdx: number) => {
         if (bIdx !== blockIdx) return b;
         return { ...b, exercises: b.exercises.filter((_, i) => i !== exIdx) };
-      }).filter((b: WorkoutBlock) => b.exercises.length > 0);
+      }).filter((b: ExtendedWorkoutBlock) => b.exercises.length > 0);
       setWorkoutOverrides(prev => ({ ...prev, [dateKey]: newBlocks }));
     }
   };
@@ -366,26 +390,32 @@ const App: React.FC = () => {
 
   const saveExerciseEdit = (dateKey: string, blockIdx: number, exIdx: number, applyToAll: boolean) => {
     if (!selectedDay) return;
-    const originalBlocks = JSON.parse(JSON.stringify(selectedDay.blocks));
-    const originalName = selectedDay.blocks[blockIdx].exercises[exIdx].name;
-    const updatedEx = { ...selectedDay.blocks[blockIdx].exercises[exIdx], ...editBuffer };
+    
+    const exercise = selectedDay.blocks[blockIdx].exercises[exIdx];
+    // We must use originalName to correctly key the globalModifications map
+    const key = exercise.originalName;
+    
+    // Cleanup numerical inputs to avoid NaN
+    const cleanBuffer = { ...editBuffer };
+    if (cleanBuffer.sets !== undefined && isNaN(cleanBuffer.sets)) cleanBuffer.sets = exercise.sets;
+
+    const updatedEx = { ...exercise, ...cleanBuffer } as ExtendedExercise;
+
+     const newBlocks: ExtendedWorkoutBlock[] = JSON.parse(JSON.stringify(selectedDay.blocks));
+      newBlocks[blockIdx].exercises[exIdx] = updatedEx;
+      setWorkoutOverrides(prev => ({ ...prev, [dateKey]: newBlocks }));
 
     if (applyToAll) {
-      setGlobalModifications(prev => ({ ...prev, [originalName]: updatedEx }));
-    } else {
-      const newBlocks = originalBlocks.map((b: WorkoutBlock, bIdx: number) => {
-        if (bIdx !== blockIdx) return b;
-        const newExercises = [...b.exercises];
-        newExercises[exIdx] = updatedEx;
-        return { ...b, exercises: newExercises };
-      });
-      setWorkoutOverrides(prev => ({ ...prev, [dateKey]: newBlocks }));
+      setGlobalModifications(prev => ({ ...prev, [key]: updatedEx }));
+      // If we applied globally, we might want to clear any specific local override for this day to keep it synced
+     
     }
+    
     setEditingExKey(null);
     setEditBuffer({});
   };
 
-  const restoreSoftDeletedBlock = (dateKey: string, block: WorkoutBlock) => {
+  const restoreSoftDeletedBlock = (dateKey: string, block: ExtendedWorkoutBlock) => {
     setWorkoutOverrides(prev => {
       const current = prev[dateKey] || [];
       return { ...prev, [dateKey]: [...current, block] };
@@ -538,6 +568,7 @@ const App: React.FC = () => {
           const dateKey = day.date.toISOString().split('T')[0];
           const isMoving = moveSourceId === day.date.toISOString();
           const isToday = day.date.getTime() === todayMidnight.getTime();
+          const isRestDay = dots.length === 0 && !day.cardio;
           
           return (
             <button 
@@ -555,7 +586,13 @@ const App: React.FC = () => {
                 {completedDays[dateKey] && <i className="fa-solid fa-circle-check text-[11px] text-[#af8d99]"></i>}
               </div>
               <div className="flex flex-wrap justify-center gap-1 md:gap-3 w-full mt-3 px-1">
-                {dots.map((group, idx) => <Diamond key={idx} className="w-1 h-1 md:w-2 md:h-2" colorClass={MUSCLE_COLORS[group]} />)}
+                {isRestDay ? (
+                  <div className="flex flex-col items-center gap-1 opacity-20 group-hover:opacity-40 transition-opacity">
+                    <i className="fa-solid fa-leaf text-lg md:text-2xl text-[#af8d99]"></i>
+                  </div>
+                ) : (
+                  dots.map((group, idx) => <Diamond key={idx} className="w-1 h-1 md:w-2 md:h-2" colorClass={MUSCLE_COLORS[group]} />)
+                )}
               </div>
               {day.cardio && <div className="absolute bottom-2 right-2 md:bottom-4 md:right-4"><Diamond className="w-1 h-1 md:w-2 md:h-2" colorClass={CARDIO_COLORS[day.cardio]} /></div>}
             </button>
@@ -647,16 +684,22 @@ const App: React.FC = () => {
                           const exKey = `${bIdx}-${eIdx}`;
                           const isEditing = editingExKey === exKey;
                           
-                          const baseEx = baseDayBlocks.flatMap(b => b.exercises).find(e => e.name === ex.name);
-                          const hasLocalEdits = baseEx && (ex.sets !== baseEx.sets || ex.baseReps !== baseEx.baseReps);
-                          const isEditedGlobally = !!globalModifications[ex.name];
+                          // Look up the "original" exercise from the core routine
+                          const baseExForRef = baseDayBlocks.flatMap(b => b.exercises).find(e => e.originalName === ex.originalName);
+                          const hasLocalEdits = baseExForRef && (ex.sets !== baseExForRef.sets || ex.baseReps !== baseExForRef.baseReps || ex.name !== baseExForRef.name);
+                          const isEditedGlobally = !!globalModifications[ex.originalName];
 
                           return (
                             <div key={eIdx} className="bg-white p-6 rounded-[1.5rem] border border-[#e5d5da] hover:border-[#af8d99]/20 transition-all group shadow-sm">
                               <div className="flex justify-between items-center">
                                 <div className="flex-1">
                                   {isEditing ? (
-                                    <input className="bg-transparent border-b-2 border-[#af8d99] text-sm font-bold text-[#6d5b62] focus:outline-none w-full" value={editBuffer.name ?? ex.name} onChange={e => setEditBuffer(p => ({ ...p, name: e.target.value }))} autoFocus />
+                                    <input 
+                                      className="bg-transparent border-b-2 border-[#af8d99] text-sm font-bold text-[#6d5b62] focus:outline-none w-full" 
+                                      value={editBuffer.name ?? ex.name} 
+                                      onChange={e => setEditBuffer(p => ({ ...p, name: e.target.value }))} 
+                                      autoFocus 
+                                    />
                                   ) : (
                                     <div className="flex items-center gap-3">
                                       <span className="font-bold text-[#6d5b62] text-sm tracking-tight">{ex.name}</span>
@@ -664,9 +707,13 @@ const App: React.FC = () => {
                                         <button 
                                           onClick={() => {
                                             if (isEditedGlobally) {
-                                               setGlobalModifications(prev => { const next = {...prev}; delete next[ex.name]; return next; });
+                                               setGlobalModifications(prev => { 
+                                                 const next = {...prev}; 
+                                                 delete next[ex.originalName]; 
+                                                 return next; 
+                                               });
                                             } else {
-                                               undoExerciseChangeForName(dateKey, ex.name);
+                                               undoExerciseChangeForName(dateKey, ex.originalName);
                                             }
                                           }} 
                                           className="w-6 h-6 rounded-full bg-[#af8d99]/10 text-[#af8d99] hover:bg-[#af8d99] hover:text-white flex items-center justify-center transition-all animate-in zoom-in" 
@@ -680,7 +727,12 @@ const App: React.FC = () => {
                                   <div className="mt-2 flex items-center gap-3">
                                     {isEditing ? (
                                       <div className="flex items-center gap-2">
-                                        <input type="number" className="w-12 bg-transparent border-b border-[#af8d99] text-[10px] font-bold" value={editBuffer.sets ?? ex.sets} onChange={e => setEditBuffer(p => ({ ...p, sets: parseInt(e.target.value) }))} />
+                                        <input 
+                                          type="number" 
+                                          className="w-12 bg-transparent border-b border-[#af8d99] text-[10px] font-bold" 
+                                          value={editBuffer.sets ?? ex.sets} 
+                                          onChange={e => setEditBuffer(p => ({ ...p, sets: parseInt(e.target.value) }))} 
+                                        />
                                         <span className="text-[10px] text-[#b3a3a9] font-bold uppercase tracking-widest">Sets</span>
                                       </div>
                                     ) : (
@@ -690,7 +742,11 @@ const App: React.FC = () => {
                                 </div>
                                 <div className="text-right flex items-center gap-6">
                                   {isEditing ? (
-                                    <input className="w-14 text-center bg-transparent border-b-2 border-[#af8d99] text-sm font-bold text-[#af8d99]" value={editBuffer.baseReps ?? ex.baseReps} onChange={e => setEditBuffer(p => ({ ...p, baseReps: e.target.value }))} />
+                                    <input 
+                                      className="w-14 text-center bg-transparent border-b-2 border-[#af8d99] text-sm font-bold text-[#af8d99]" 
+                                      value={editBuffer.baseReps ?? ex.baseReps} 
+                                      onChange={e => setEditBuffer(p => ({ ...p, baseReps: e.target.value }))} 
+                                    />
                                   ) : (
                                     <div className="flex items-baseline gap-1">
                                       <span className="text-xl font-bold text-[#af8d99] tabular-nums">{ex.baseReps}</span>
@@ -731,9 +787,13 @@ const App: React.FC = () => {
                     </div>
                   );
                 }) : (
-                  <div className="text-center py-20 opacity-30 flex flex-col items-center">
-                    <i className="fa-solid fa-sparkles text-5xl text-[#af8d99] mb-4"></i>
-                    <p className="font-bold uppercase tracking-[0.4em] text-[11px]">No active blocks for this day</p>
+                  <div className="text-center py-24 flex flex-col items-center animate-in fade-in zoom-in duration-700">
+                    <div className="w-20 h-20 bg-[#af8d99]/5 rounded-full flex items-center justify-center mb-8 relative">
+                      <i className="fa-solid fa-leaf text-4xl text-[#af8d99] opacity-40"></i>
+                      <div className="absolute inset-0 rounded-full border border-[#af8d99]/10 animate-ping"></div>
+                    </div>
+                    <p className="font-light text-2xl text-[#af8d99] tracking-[0.2em] uppercase mb-3">Serenity & Stillness</p>
+                    <p className="font-bold uppercase tracking-[0.4em] text-[9px] text-[#b3a3a9]">Your body is blooming in the quiet</p>
                   </div>
                 )}
                 

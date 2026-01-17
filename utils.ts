@@ -75,8 +75,8 @@ export function generateCalendarForRange(startYear: number, startMonth: number, 
         blocks = [getCoreBlock(), { ...LEG_FOUNDATION_BLOCK, title: "Lower" }];
         break;
       case 'Friday':
-        blocks = [{ ...CHEST_ARMS_SHOULDERS_BLOCK, title: "CAS" }];
-        cardio = CardioMode.Aerobic;
+        blocks = [];
+        cardio = null;
         break;
       case 'Saturday':
         blocks = [
