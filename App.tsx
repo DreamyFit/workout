@@ -415,6 +415,14 @@ const App: React.FC = () => {
     });
   };
 
+  const handlePrevMonth = () => {
+    setCurrentMonth(prev => (prev - 1 + 12) % 12);
+  };
+
+  const handleNextMonth = () => {
+    setCurrentMonth(prev => (prev + 1) % 12);
+  };
+
   return (
     <div className="relative min-h-screen max-w-5xl mx-auto px-4 py-12 text-[#4a3f44] overflow-x-hidden">
       
@@ -486,18 +494,36 @@ const App: React.FC = () => {
           ))}
         </div>
 
-        <div className="relative" ref={dropdownRef}>
-          <button onClick={() => setIsMonthDropdownOpen(!isMonthDropdownOpen)} className="flex items-center gap-6 bg-[#faf5f7] border border-[#e5d5da] px-10 py-3.5 rounded-full shadow-lg text-[11px] font-bold tracking-[0.3em] uppercase text-[#9d8189] transition-all">
-            {MONTHS[currentMonth]}
-            <i className={`fa-solid fa-chevron-down text-[10px] transition-transform duration-500 ${isMonthDropdownOpen ? 'rotate-180' : ''}`}></i>
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={handlePrevMonth}
+            className="w-10 h-10 flex items-center justify-center rounded-full bg-[#faf5f7] border border-[#e5d5da] text-[#af8d99] shadow-sm hover:scale-110 active:scale-95 transition-all"
+            title="Previous Month"
+          >
+            <i className="fa-solid fa-chevron-left text-[10px]"></i>
           </button>
-          {isMonthDropdownOpen && (
-            <div className="absolute top-full left-1/2 -translate-x-1/2 mt-4 w-72 bg-[#faf5f7] backdrop-blur-xl rounded-[2rem] shadow-2xl border border-[#e5d5da] overflow-hidden z-[70]">
-              {MONTHS.map((name, idx) => (
-                <button key={name} onClick={() => { setCurrentMonth(idx); setIsMonthDropdownOpen(false); }} className={`w-full px-8 py-4 text-[10px] font-bold tracking-[0.3em] uppercase transition-all ${currentMonth === idx ? 'bg-[#af8d99] text-white' : 'text-[#8e7d7d] hover:bg-[#af8d99]/5 hover:text-[#af8d99]'}`}>{name}</button>
-              ))}
-            </div>
-          )}
+
+          <div className="relative" ref={dropdownRef}>
+            <button onClick={() => setIsMonthDropdownOpen(!isMonthDropdownOpen)} className="flex items-center gap-6 bg-[#faf5f7] border border-[#e5d5da] px-10 py-3.5 rounded-full shadow-lg text-[11px] font-bold tracking-[0.3em] uppercase text-[#9d8189] transition-all">
+              {MONTHS[currentMonth]}
+              <i className={`fa-solid fa-chevron-down text-[10px] transition-transform duration-500 ${isMonthDropdownOpen ? 'rotate-180' : ''}`}></i>
+            </button>
+            {isMonthDropdownOpen && (
+              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-4 w-72 bg-[#faf5f7] backdrop-blur-xl rounded-[2rem] shadow-2xl border border-[#e5d5da] overflow-hidden z-[70]">
+                {MONTHS.map((name, idx) => (
+                  <button key={name} onClick={() => { setCurrentMonth(idx); setIsMonthDropdownOpen(false); }} className={`w-full px-8 py-4 text-[10px] font-bold tracking-[0.3em] uppercase transition-all ${currentMonth === idx ? 'bg-[#af8d99] text-white' : 'text-[#8e7d7d] hover:bg-[#af8d99]/5 hover:text-[#af8d99]'}`}>{name}</button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <button 
+            onClick={handleNextMonth}
+            className="w-10 h-10 flex items-center justify-center rounded-full bg-[#faf5f7] border border-[#e5d5da] text-[#af8d99] shadow-sm hover:scale-110 active:scale-95 transition-all"
+            title="Next Month"
+          >
+            <i className="fa-solid fa-chevron-right text-[10px]"></i>
+          </button>
         </div>
       </header>
 
